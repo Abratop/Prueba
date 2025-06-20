@@ -18,11 +18,17 @@ KronosCombiPlayer::KronosCombiPlayer()
               }
           }
       }),
-      run_arp_thread_(false), // Ensure this is initialized
+      run_arp_thread_(false),
+      arpeggiator_enabled_(false),
       initialized_(false),
       ports_selected_(false),
       current_combi_index_(-1) {
-    std::cout << "Kronos Combi Player initialized." << std::endl;
+    std::cout << "Kronos Combi Player constructor." << std::endl;
+    // Default Arp settings that don't require MIDI ports yet
+    arpeggiator_.setRate(4.0f);
+    arpeggiator_.setOctaves(1);
+    arpeggiator_.setPattern(ArpPattern::UP);
+    // arp_target_channel_ and arp_output_channel_ will be set after port selection / combi load
 }
 
 KronosCombiPlayer::~KronosCombiPlayer() {
@@ -30,10 +36,56 @@ KronosCombiPlayer::~KronosCombiPlayer() {
     shutdown();
 }
 
-void KronosCombiPlayer::initialize() {
-    std::cout << "\n--- Initializing MIDI Ports ---" << std::endl;
+void KronosCombiPlayer::populatePortNames() {
+    midi_input_port_names_.clear();
+    unsigned int count = midi_input_.getPortCount();
+    for (unsigned int i = 0; i < count; ++i) {
+        midi_input_port_names_.push_back(midi_input_.getPortName(i));
+    }
 
-    // Output Port
+    midi_output_port_names_.clear();
+    count = midi_output_.getPortCount();
+    for (unsigned int i = 0; i < count; ++i) {
+        midi_output_port_names_.push_back(midi_output_.getPortName(i));
+    }
+}
+
+void KronosCombiPlayer::scanMidiPorts() {
+    std::cout << "Scanning MIDI ports..." << std::endl;
+    populatePortNames();
+    std::cout << "Found " << midi_input_port_names_.size() << " MIDI input ports." << std::endl;
+    std::cout << "Found " << midi_output_port_names_.size() << " MIDI output ports." << std::endl;
+}
+
+
+bool KronosCombiPlayer::openMidiPorts(int inputPortIndex, int outputPortIndex) {
+    std::cout << "\n--- Opening MIDI Ports ---" << std::endl;
+    ports_selected_ = false; // Reset
+    initialized_ = false;    // Reset
+
+    if (static_cast<unsigned int>(outputPortIndex) >= midi_output_port_names_.size() || outputPortIndex < 0) {
+        std::cerr << "ERROR: Invalid MIDI output port index: " << outputPortIndex << std::endl;
+        return false;
+    }
+    std::cout << "Attempting to open MIDI Output port: " << outputPortIndex << " - " << midi_output_port_names_[outputPortIndex] << std::endl;
+    if (!midi_output_.openPort(outputPortIndex)) {
+        std::cerr << "ERROR: Failed to open MIDI output port " << outputPortIndex << " - " << midi_output_port_names_[outputPortIndex] << std::endl;
+        return false;
+    }
+    std::cout << "Successfully opened MIDI Output port: " << outputPortIndex << " - " << midi_output_port_names_[outputPortIndex] << std::endl;
+
+    if (static_cast<unsigned int>(inputPortIndex) >= midi_input_port_names_.size() || inputPortIndex < 0) {
+        std::cerr << "ERROR: Invalid MIDI input port index: " << inputPortIndex << std::endl;
+        midi_output_.closePort(); // Clean up already opened output port
+        return false;
+    }
+    std::cout << "Attempting to open MIDI Input port: " << inputPortIndex << " - " << midi_input_port_names_[inputPortIndex] << std::endl;
+    if (!midi_input_.openPort(inputPortIndex)) {
+        std::cerr << "ERROR: Failed to open MIDI input port " << inputPortIndex << " - " << midi_input_port_names_[inputPortIndex] << std::endl;
+        midi_output_.closePort();
+        return false;
+    }
+    std::cout << "Successfully opened MIDI Input port: " << inputPortIndex << " - " << midi_input_port_names_[inputPortIndex] << std::endl;
     std::cout << "\n--- MIDI Output Port Selection ---" << std::endl;
     unsigned int out_port_count = midi_output_.getPortCount();
     std::cout << "Found " << out_port_count << " MIDI output ports." << std::endl;
@@ -104,61 +156,70 @@ void KronosCombiPlayer::initialize() {
             this->handleControlEvent(ch, c, val);
         });
 
+    std::cout << "Setting up MIDI input callbacks..." << std::endl;
+    midi_input_.setArpeggioNoteCallback(
+        [this](uint8_t ch, uint8_t n, uint8_t v, bool on) {
+            this->handleNoteEvent(ch, n, v, on);
+        });
+    midi_input_.setArpeggioControlCallback(
+        [this](uint8_t ch, uint8_t c, uint8_t val) {
+            this->handleControlEvent(ch, c, val);
+        });
+
     std::cout << "\nMIDI ports configured successfully." << std::endl;
     ports_selected_ = true;
-    initialized_ = true;
-
-    // Default Arpeggiator settings
-    arp_target_channel_ = 0; // Default target channel for arp input
-    arp_output_channel_ = 0; // Default output channel for arp notes
-    arpeggiator_.setChannel(arp_output_channel_);
-    arpeggiator_.setRate(4.0f); // Default 4 notes per second (120 BPM 16ths)
-    arpeggiator_.setOctaves(1); // Default to 1 octave range (original + 1 up)
-    arpeggiator_.setPattern(ArpPattern::UP);
-    std::cout << "Default Arpeggiator settings: Target CH" << (int)arp_target_channel_
-              << ", Output CH" << (int)arp_output_channel_
-              << ", Rate " << arpeggiator_.getRate() << " Hz, Octaves " << 1
-              << ", Pattern UP" << std::endl;
+    initialized_ = true; // Mark as initialized now that ports are open
+    return true;
 }
 
+
 bool KronosCombiPlayer::loadPcgFile(const std::string& filePath) {
-    if (!ports_selected_) { // Should be guaranteed by initialized_ check before calling this
-        std::cerr << "ERROR: MIDI ports not selected/initialized. Please call initialize() first." << std::endl;
-        return false;
-    }
+    // Ports do not strictly need to be open to load a PCG file,
+    // but initialized_ flag might be used by GUI to enable/disable features.
+    // if (!initialized_) {
+    //     std::cerr << "ERROR: Player not initialized (MIDI ports not open). Cannot load PCG file." << std::endl;
+    //     return false;
+    // }
     std::cout << "Loading PCG file: " << filePath << std::endl;
     PcgParser parser(filePath);
     if (!parser.parse()) {
         std::cerr << "ERROR: Failed to load or parse PCG file: " << filePath << std::endl;
+        loaded_combis_.clear(); // Ensure it's empty on failure
+        loaded_combi_names_for_gui_.clear();
         return false;
     }
     loaded_combis_ = parser.getCombis();
+
+    loaded_combi_names_for_gui_.clear();
     if (loaded_combis_.empty()) {
         std::cout << "PCG file loaded, but no combis were found." << std::endl;
     } else {
         std::cout << "PCG file loaded successfully. Found " << loaded_combis_.size() << " combis." << std::endl;
+        for(const auto& combi : loaded_combis_) {
+            char name_buffer[25] = {0};
+            strncpy(name_buffer, combi.name, 24);
+            loaded_combi_names_for_gui_.push_back(std::string(name_buffer));
+        }
     }
     current_combi_index_ = -1;
     return true;
 }
 
 void KronosCombiPlayer::listCombis() const {
+    // This method was for console; GUI will use getCombiNamesForGui()
     if (loaded_combis_.empty()) {
         std::cout << "\nNo combis loaded. Load a PCG file first." << std::endl;
         return;
     }
-    std::cout << "\n--- Available Combis (" << loaded_combis_.size() << ") ---" << std::endl;
-    for (size_t i = 0; i < loaded_combis_.size(); ++i) {
-        // Ensure name is null-terminated before creating std::string
-        char name_buffer[25] = {0};
-        strncpy(name_buffer, loaded_combis_[i].name, 24);
-        std::cout << i << ": " << name_buffer << std::endl;
+    std::cout << "\n--- Available Combis (" << loaded_combi_names_for_gui_.size() << ") ---" << std::endl;
+    for (size_t i = 0; i < loaded_combi_names_for_gui_.size(); ++i) {
+        std::cout << i << ": " << loaded_combi_names_for_gui_[i] << std::endl;
     }
 }
 
 bool KronosCombiPlayer::selectCombi(int combiIndex) {
-    if (!initialized_) {
-        std::cerr << "ERROR: Player not initialized. Cannot select combi." << std::endl;
+    if (!initialized_) { // Check if MIDI ports are open
+        std::cerr << "ERROR: Player not initialized (MIDI ports not open). Cannot select combi." << std::endl;
         return false;
     }
     if (combiIndex < 0 || static_cast<size_t>(combiIndex) >= loaded_combis_.size()) {
@@ -263,14 +324,37 @@ void KronosCombiPlayer::run() {
         std::cerr << "Player not initialized or no combi selected. Exiting run loop." << std::endl;
         return;
     }
-    // The actual run loop is now in main.cpp, this method might be deprecated or repurposed.
-    // For now, if called, it can just print status.
-    std::cout << "\nKronos Combi Player run() called (main loop is in main.cpp)." << std::endl;
-    std::cout << "Selected Combi: " << current_combi_index_ << std::endl;
-    std::cout << "Arpeggiator is " << (run_arp_thread_ ? "active" : "inactive")
-              << " targeting channel " << (int)arp_target_channel_
-              << ", outputting to channel " << (int)arp_output_channel_ << std::endl;
-    // The thread in main.cpp will keep it alive.
+    // The actual run loop is now in main.cpp, this method might be deprecated or repurposed to CLI mode.
+    // For GUI mode, its functionality is superseded by the ImGui loop in main.cpp.
+    std::cout << "\nKronosCombiPlayer::run() called. In GUI mode, this is a no-op. Main loop is in main.cpp." << std::endl;
+    if (!initialized_ || current_combi_index_ == -1) {
+        std::cout << "  Player not fully initialized or no combi selected." << std::endl;
+        return;
+    }
+    std::cout << "  Selected Combi: " << current_combi_index_ << " - " << loaded_combi_names_for_gui_[current_combi_index_] << std::endl;
+    std::cout << "  Arpeggiator is " << (arpeggiator_enabled_ ? "enabled" : "disabled")
+              << ", Target CH" << (int)arp_target_channel_
+              << ", Output CH" << (int)arp_output_channel_ << std::endl;
+}
+
+void KronosCombiPlayer::setArpeggiatorEnabled(bool enabled) {
+    std::cout << "Setting arpeggiator enabled: " << (enabled ? "true" : "false") << std::endl;
+    arpeggiator_enabled_ = enabled;
+    if (arpeggiator_enabled_) {
+        if (initialized_ && current_combi_index_ != -1) { // Only start if ready
+             startArpThread();
+        } else {
+            std::cout << "  Arpeggiator enabled, but will not start thread until MIDI is ready and combi selected." << std::endl;
+        }
+    } else {
+        stopArpThread();
+        // When disabling, ensure any last arp note is turned off
+        if (arpeggiator_.last_note_is_on_ && midi_output_.isPortOpen()) {
+             std::cout << "  Turning off last arpeggiator note due to disable." << std::endl;
+             midi_output_.sendNoteOff(arpeggiator_.output_channel_, arpeggiator_.last_played_note_, 0);
+             // arpeggiator_.last_note_is_on_ = false; // Arp tick would normally do this
+        }
+    }
 }
 
 void KronosCombiPlayer::shutdown() {
@@ -333,13 +417,19 @@ void KronosCombiPlayer::handleControlEvent(uint8_t channel, uint8_t controller, 
               << " CC=" << (int)controller
               << " Val=" << (int)value << std::endl;
 
-    // Pass through CC messages on all active channels in the combi,
-    // including the arp_target_channel (could be used for expression, etc.)
+    // Pass through CC messages
+    // If CC is on arp_target_channel_, it might be desirable to pass it to arp_output_channel_
+    // or handle it specifically (e.g. filter/map). For now, direct pass-through if timbre is active.
     if (midi_output_.isPortOpen() && current_combi_index_ != -1 && channel < 16) {
         const TimbreData& targetTimbre = current_combi_details_.timbres[channel];
         if (targetTimbre.status == 0x21) {
-            std::cout << "  Passing through CC on channel " << (int)channel << std::endl;
-            midi_output_.sendControlChange(channel, controller, value);
+            uint8_t output_cc_channel = channel;
+            // Example: if you wanted CCs on arp_target_channel to also go to arp_output_channel
+            // if (channel == arp_target_channel_ && arpeggiator_enabled_) {
+            //    output_cc_channel = arp_output_channel_;
+            // }
+            std::cout << "  Passing through CC on channel " << (int)channel << " to output channel " << (int)output_cc_channel << std::endl;
+            midi_output_.sendControlChange(output_cc_channel, controller, value);
         } else {
             std::cout << "  CC on channel " << (int)channel << " ignored (timbre not active)." << std::endl;
         }

@@ -44,20 +44,60 @@ private:
     // Arpeggiator members
     Arpeggiator arpeggiator_;
     std::thread arp_thread_;
-    std::atomic<bool> run_arp_thread_{false}; // Initialize to false
-    uint8_t arp_target_channel_ = 0; // MIDI Channel whose input notes feed the arpeggiator
-    uint8_t arp_output_channel_ = 0; // MIDI Channel where arpeggiator sends its output
+    std::atomic<bool> run_arp_thread_{false};
+    uint8_t arp_target_channel_ = 0;
+    uint8_t arp_output_channel_ = 0;
+    bool arpeggiator_enabled_ = false;
 
-    bool initialized_ = false;
-    bool ports_selected_ = false; // To track if MIDI ports have been successfully selected
+    bool initialized_ = false; // Tracks if MIDI ports are open and basic setup done
+    bool ports_selected_ = false;
+    std::vector<std::string> midi_input_port_names_;
+    std::vector<std::string> midi_output_port_names_;
+    std::vector<std::string> loaded_combi_names_for_gui_;
+
 
 private:
     void startArpThread();
     void stopArpThread();
+    void populatePortNames(); // Helper to fill port name vectors
 
 public:
-    bool isInitialized() const { return initialized_ && ports_selected_; }
+    // Constructor still initializes arpeggiator_
+    // Destructor still calls shutdown()
+
+    // void initialize(); // Old console-based initialize - to be replaced or re-purposed
+    bool openMidiPorts(int inputPortIndex, int outputPortIndex);
+    void scanMidiPorts(); // Fills the port name vectors
+
+    // Getters for GUI
+    const std::vector<std::string>& getMidiInputPortNames() const { return midi_input_port_names_; }
+    const std::vector<std::string>& getMidiOutputPortNames() const { return midi_output_port_names_; }
+    const std::vector<std::string>& getCombiNamesForGui() const { return loaded_combi_names_for_gui_; }
+    // getCombiName(int index) might not be needed if we populate a string list above
+    // const std::string& getCombiName(int index) const; // Requires CombiData.name to be std::string or converted
+
+    bool isInitialized() const { return initialized_; } // Now means MIDI ports are successfully open
     size_t getCombiCount() const { return loaded_combis_.size(); }
+
+    // Arpeggiator controls from GUI
+    void setArpeggiatorEnabled(bool enabled);
+    bool isArpeggiatorEnabled() const { return arpeggiator_enabled_; }
+    Arpeggiator& getArpeggiator() { return arpeggiator_; }
+    void setArpTargetChannel(uint8_t channel) { arp_target_channel_ = channel; } // GUI might need this
+    uint8_t getArpTargetChannel() const { return arp_target_channel_; }
+    void setArpOutputChannel(uint8_t channel) { // GUI might need this
+        arp_output_channel_ = channel;
+        arpeggiator_.setChannel(arp_output_channel_);
+    }
+    uint8_t getArpOutputChannel() const { return arp_output_channel_; }
+
+    // Expose MidiInput/Output for direct port count/name access if needed by GUI before full init
+    MidiInput& getMidiInput() { return midi_input_; }
+    MidiOutput& getMidiOutput() { return midi_output_; }
+
+
+    // loadPcgFile, selectCombi, run, shutdown remain mostly the same signatures
+    // but their internal logic might adapt (e.g. run() might become a no-op)
 };
 
 #endif // KRONOS_COMBI_PLAYER_H

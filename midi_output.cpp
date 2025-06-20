@@ -1,81 +1,113 @@
 #include "midi_output.h"
 #include <vector>
 #include <iostream> // For std::cout and std::cerr
+// No need to include <stdexcept> here if RtMidi.h provides RtMidiError,
+// and midi_output.h already includes it.
 
 MidiOutput::MidiOutput() {
     try {
-        midi_out_ = std::make_unique<RtMidiOut>();
+        // Explicitly select an API (e.g., WINDOWS_MM for Windows)
+        // RtMidi::Api::UNSPECIFIED will allow RtMidi to choose a default.
+        // For this adaptation, we'll specify WINDOWS_MM as per the prompt.
+        #ifdef _WIN32
+            midi_out_ = std::make_unique<RtMidiOut>(RtMidi::Api::WINDOWS_MM);
+            std::cout << "MidiOutput: Requested WINDOWS_MM API." << std::endl;
+        #else
+            // For other OS, let RtMidi pick (or choose another specific API like LINUX_ALSA, MACOSX_CORE)
+            midi_out_ = std::make_unique<RtMidiOut>(RtMidi::Api::UNSPECIFIED);
+            std::cout << "MidiOutput: Requested UNSPECIFIED API (auto-select)." << std::endl;
+        #endif
     } catch (const RtMidiError &error) {
-        std::cerr << "Error creating RtMidiOut: " << error.what() << std::endl;
-        // midi_out_ will remain nullptr, isPortOpen() will be false.
-        // Methods should check for midi_out_ validity.
+        // Assuming RtMidiError has getMessage()
+        std::cerr << "ERROR: MidiOutput Constructor: RtMidiError - " << error.getMessage() << std::endl;
+        // midi_out_ will remain nullptr. Subsequent calls should check.
+    } catch (const std::exception &e) {
+        std::cerr << "ERROR: MidiOutput Constructor: std::exception - " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "ERROR: MidiOutput Constructor: Unknown exception." << std::endl;
     }
 }
 
 MidiOutput::~MidiOutput() {
-    if (midi_out_ && midi_out_->isPortOpen()) {
+    if (midi_out_ && isPortOpen()) { // isPortOpen itself handles !midi_out_ check
         closePort();
     }
-    // std::unique_ptr will handle deletion of midi_out_
 }
 
 bool MidiOutput::openPort(unsigned int portNumber) {
     if (!midi_out_) {
-        std::cerr << "MidiOutput: RtMidiOut not initialized." << std::endl;
+        std::cerr << "ERROR: MidiOutput::openPort: RtMidiOut not initialized (constructor likely failed)." << std::endl;
         return false;
     }
-    if (midi_out_->isPortOpen()) {
-        std::cout << "MidiOutput: Port already open. Closing first." << std::endl;
-        midi_out_->closePort();
+    if (isPortOpen()) { // isPortOpen has its own try-catch
+        std::cout << "MidiOutput: Port was already open. Closing first." << std::endl;
+        closePort(); // closePort has its own try-catch
     }
-    if (portNumber >= midi_out_->getPortCount()) {
-        std::cerr << "MidiOutput: Invalid port number: " << portNumber << std::endl;
-        return false;
-    }
+
+    unsigned int portCount = 0;
     try {
-        midi_out_->openPort(portNumber);
-        std::cout << "MidiOutput: Opened port " << portNumber << " (" << midi_out_->getPortName(portNumber) << ")" << std::endl;
+        portCount = midi_out_->getPortCount();
     } catch (const RtMidiError &error) {
-        std::cerr << "MidiOutput: Error opening port " << portNumber << ": " << error.what() << std::endl;
+        std::cerr << "ERROR: MidiOutput::openPort: RtMidiError getting port count - " << error.getMessage() << std::endl;
         return false;
     }
-    return midi_out_->isPortOpen();
+
+    if (portNumber >= portCount) {
+        std::cerr << "ERROR: MidiOutput::openPort: Invalid port number: " << portNumber
+                  << ". Available ports: " << portCount << "." << std::endl;
+        return false;
+    }
+
+    try {
+        std::string portNameStr = midi_out_->getPortName(portNumber); // Get name for logging before opening
+        std::cout << "MidiOutput: Attempting to open output port " << portNumber << " (" << portNameStr << ")" << std::endl;
+        midi_out_->openPort(portNumber, "KronosPlayerOut"); // Port name for the client
+        std::cout << "MidiOutput: Successfully opened output port " << portNumber << " (" << portNameStr << ")" << std::endl;
+        return true;
+    } catch (const RtMidiError &error) {
+        std::cerr << "ERROR: MidiOutput::openPort: RtMidiError - " << error.getMessage() << std::endl;
+    }
+    return false;
 }
 
 void MidiOutput::closePort() {
-    if (midi_out_ && midi_out_->isPortOpen()) {
-        std::cout << "MidiOutput: Closing MIDI port." << std::endl;
+    if (!midi_out_) {
+        // std::cerr << "MidiOutput::closePort: RtMidiOut not initialized." << std::endl; // Can be noisy
+        return;
+    }
+    if (isPortOpen()) { // Use our isPortOpen which has try-catch
+        std::cout << "MidiOutput: Closing MIDI output port." << std::endl;
         try {
             midi_out_->closePort();
         } catch (const RtMidiError &error) {
-            std::cerr << "MidiOutput: Error closing port: " << error.what() << std::endl;
+            std::cerr << "ERROR: MidiOutput::closePort: RtMidiError - " << error.getMessage() << std::endl;
         }
     }
 }
 
 unsigned int MidiOutput::getPortCount() const {
     if (!midi_out_) {
-        std::cerr << "MidiOutput: RtMidiOut not initialized." << std::endl;
+        // std::cerr << "MidiOutput::getPortCount: RtMidiOut not initialized." << std::endl; // Can be noisy
         return 0;
     }
     try {
         return midi_out_->getPortCount();
     } catch (const RtMidiError &error) {
-        std::cerr << "MidiOutput: Error getting port count: " << error.what() << std::endl;
+        std::cerr << "ERROR: MidiOutput::getPortCount: RtMidiError - " << error.getMessage() << std::endl;
         return 0;
     }
 }
 
 std::string MidiOutput::getPortName(unsigned int portNumber) const {
     if (!midi_out_) {
-        std::cerr << "MidiOutput: RtMidiOut not initialized." << std::endl;
-        return "";
+        // std::cerr << "MidiOutput::getPortName: RtMidiOut not initialized." << std::endl; // Can be noisy
+        return "[Error: Not Initialized]";
     }
     try {
         return midi_out_->getPortName(portNumber);
     } catch (const RtMidiError &error) {
-        std::cerr << "MidiOutput: Error getting port name for port " << portNumber << ": " << error.what() << std::endl;
-        return "";
+        std::cerr << "ERROR: MidiOutput::getPortName for port " << portNumber << ": RtMidiError - " << error.getMessage() << std::endl;
+        return "[Error: RtMidiError]";
     }
 }
 
@@ -83,77 +115,71 @@ bool MidiOutput::isPortOpen() const {
     if (!midi_out_) {
         return false;
     }
-    return midi_out_->isPortOpen();
+    try {
+        return midi_out_->isPortOpen();
+    } catch (const RtMidiError &error) {
+        std::cerr << "ERROR: MidiOutput::isPortOpen: RtMidiError - " << error.getMessage() << std::endl;
+        return false; // Assume not open if error occurs
+    }
 }
 
 void MidiOutput::sendNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
-    if (!isPortOpen()) {
-        // std::cerr << "MidiOutput: Port not open. Cannot send Note On." << std::endl;
-        return;
-    }
+    if (!isPortOpen()) return; // isPortOpen has logging and checks midi_out_
     if (channel > 15 || note > 127 || velocity > 127) {
-        std::cerr << "MidiOutput: Invalid Note On parameter." << std::endl;
+        std::cerr << "ERROR: MidiOutput::sendNoteOn: Invalid MIDI parameter." << std::endl;
         return;
     }
     std::vector<unsigned char> message = {static_cast<unsigned char>(0x90 | channel), note, velocity};
     try {
         midi_out_->sendMessage(&message);
     } catch (const RtMidiError &error) {
-        std::cerr << "MidiOutput: Error sending Note On: " << error.what() << std::endl;
+        std::cerr << "ERROR: MidiOutput::sendNoteOn: RtMidiError - " << error.getMessage() << std::endl;
     }
 }
 
 void MidiOutput::sendNoteOff(uint8_t channel, uint8_t note, uint8_t velocity) {
-    if (!isPortOpen()) {
-        // std::cerr << "MidiOutput: Port not open. Cannot send Note Off." << std::endl;
-        return;
-    }
-     if (channel > 15 || note > 127 || velocity > 127) {
-        std::cerr << "MidiOutput: Invalid Note Off parameter." << std::endl;
+    if (!isPortOpen()) return;
+    if (channel > 15 || note > 127 || velocity > 127) {
+        std::cerr << "ERROR: MidiOutput::sendNoteOff: Invalid MIDI parameter." << std::endl;
         return;
     }
     std::vector<unsigned char> message = {static_cast<unsigned char>(0x80 | channel), note, velocity};
     try {
         midi_out_->sendMessage(&message);
     } catch (const RtMidiError &error) {
-        std::cerr << "MidiOutput: Error sending Note Off: " << error.what() << std::endl;
+        std::cerr << "ERROR: MidiOutput::sendNoteOff: RtMidiError - " << error.getMessage() << std::endl;
     }
 }
 
 void MidiOutput::sendProgramChange(uint8_t channel, uint8_t programNumber) {
-    if (!isPortOpen()) {
-        // std::cerr << "MidiOutput: Port not open. Cannot send Program Change." << std::endl;
-        return;
-    }
+    if (!isPortOpen()) return;
     if (channel > 15 || programNumber > 127) {
-        std::cerr << "MidiOutput: Invalid Program Change parameter." << std::endl;
+        std::cerr << "ERROR: MidiOutput::sendProgramChange: Invalid MIDI parameter." << std::endl;
         return;
     }
     std::vector<unsigned char> message = {static_cast<unsigned char>(0xC0 | channel), programNumber};
     try {
         midi_out_->sendMessage(&message);
     } catch (const RtMidiError &error) {
-        std::cerr << "MidiOutput: Error sending Program Change: " << error.what() << std::endl;
+        std::cerr << "ERROR: MidiOutput::sendProgramChange: RtMidiError - " << error.getMessage() << std::endl;
     }
 }
 
 void MidiOutput::sendControlChange(uint8_t channel, uint8_t controllerNumber, uint8_t value) {
-    if (!isPortOpen()) {
-        // std::cerr << "MidiOutput: Port not open. Cannot send Control Change." << std::endl;
-        return;
-    }
+    if (!isPortOpen()) return;
     if (channel > 15 || controllerNumber > 127 || value > 127) {
-        std::cerr << "MidiOutput: Invalid Control Change parameter." << std::endl;
+        std::cerr << "ERROR: MidiOutput::sendControlChange: Invalid MIDI parameter." << std::endl;
         return;
     }
     std::vector<unsigned char> message = {static_cast<unsigned char>(0xB0 | channel), controllerNumber, value};
     try {
         midi_out_->sendMessage(&message);
     } catch (const RtMidiError &error) {
-        std::cerr << "MidiOutput: Error sending Control Change: " << error.what() << std::endl;
+        std::cerr << "ERROR: MidiOutput::sendControlChange: RtMidiError - " << error.getMessage() << std::endl;
     }
 }
 
+// setupTimbre remains largely the same, but relies on the above methods which now have error handling
 void MidiOutput::setupTimbre(const TimbreData& timbre, uint8_t channel) {
     if (channel > 15) {
         std::cerr << "MidiOutput::setupTimbre: Invalid MIDI channel " << (int)channel << std::endl;

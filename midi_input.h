@@ -4,9 +4,10 @@
 #include "libs/rtmidi/RtMidi.h"
 #include <string>
 #include <vector>
-#include <iostream> // For potential logging
+#include <iostream> // For potential logging and error reporting
 #include <functional> // For std::function
 #include <memory>     // For std::unique_ptr
+#include <stdexcept>  // For RtMidiError (though RtMidi.h should provide it)
 
 class MidiInput {
 public:

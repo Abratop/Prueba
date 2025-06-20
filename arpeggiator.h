@@ -32,7 +32,10 @@ public:
     void setChannel(uint8_t channel); // Sets the output MIDI channel for arpeggiated notes
 
     bool isActive() const;
-    float getRate() const; // Returns rate_hz_
+    float getRate() const;
+    ArpPattern getPattern() const { return current_pattern_; }
+    int getOctaves() const { return octaves_; }
+
 
 private:
     MidiNoteCallback noteOutputCallback_;

@@ -5,8 +5,9 @@
 #include "pcg_structures.h" // For TimbreData
 #include <string>
 #include <vector>
-#include <iostream> // For logging in setupTimbre
+#include <iostream> // For logging in setupTimbre and error reporting
 #include <memory>   // For std::unique_ptr
+#include <stdexcept> // For catching RtMidiError (though RtMidi.h should provide RtMidiError)
 
 class MidiOutput {
 public:

@@ -83,6 +83,35 @@ A GUI application for parsing and playing Korg Kronos `.PCG` (Program, Combi, Gl
     7.  Define necessary preprocessor symbols if RtMidi or GLFW require them (e.g., `__WINDOWS_MM__` for RtMidi, though RtMidi usually defines this itself).
     8.  Build the solution.
 
+## Alternative: Using an ImGui/GLFW/GLAD Startup Project
+
+Setting up ImGui, GLFW, GLAD, and their backends manually can be complex. A potentially easier way to get started with the GUI portion of this project is to use an existing C++ startup project/template that already has ImGui, GLFW, and GLAD configured and working.
+
+One such example is [yanuartadityan/imgui-glfw-glad-startup](https://github.com/yanuartadityan/imgui-glfw-glad-startup) (as suggested by the user).
+
+If you choose this approach, the general steps would be:
+
+1.  **Obtain the Startup Project:** Clone or download the startup project repository.
+2.  **Integrate `KronosCombiPlayer` Code:**
+    *   Copy all the source files (`.h` and `.cpp`) from *this* `KronosCombiPlayer` project (e.g., `kronos_combi_player.h/.cpp`, `arpeggiator.h/.cpp`, `pcg_parser.h/.cpp`, `pcg_structures.h`, `midi_input.h/.cpp`, `midi_output.h/.cpp`) into the startup project's source directory. You might want to create a subdirectory for them.
+3.  **Integrate RtMidi:**
+    *   Download the full RtMidi library source files from [https://github.com/thestk/rtmidi](https://github.com/thestk/rtmidi).
+    *   Create a directory (e.g., `libs/rtmidi` or `external/rtmidi`) within the startup project and place the RtMidi source files there.
+4.  **Adapt `main.cpp`:**
+    *   The startup project will have its own `main.cpp` that initializes GLFW, GLAD, and ImGui, and has a main render loop.
+    *   You will need to merge the logic from *our* `main.cpp` (specifically, creating the `KronosCombiPlayer g_player;` instance, calling `g_player.scanMidiPorts();` at the start, and the `renderAppGui(g_player);` function call within the ImGui frame) into the startup project's `main.cpp`.
+    *   Ensure proper cleanup, including `g_player.shutdown();`, is called before the application exits.
+5.  **Adapt Build System:**
+    *   The startup project will have its own build system (e.g., `CMakeLists.txt`, a Makefile, or Visual Studio project files).
+    *   You must modify this build system to:
+        *   Include all the `KronosCombiPlayer` source files (`.cpp`) you added.
+        *   Include all the RtMidi source files (`.cpp`) you added.
+        *   Ensure correct include paths are set for all components.
+        *   Add linker flags for RtMidi (e.g., `-lwinmm` on MinGW/g++ for Windows, or `winmm.lib` for MSVC) and any other libraries like OpenGL and GDI (which are likely already handled by the startup project for GLFW).
+        *   Ensure C++11 standard and thread support (`-pthread` for g++) are enabled.
+
+This approach can save you from manually configuring the graphics libraries and ImGui backends from scratch. However, you will need to understand the startup project's build system to integrate the `KronosCombiPlayer` code and RtMidi correctly.
+
 ## Usage
 
 1.  **Running:** Execute the compiled application (e.g., `KronosCombiPlayer.exe`).
